@@ -8,6 +8,10 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import javax.xml.ws.BindingProvider;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.security.cert.X509Certificate;
 import java.util.*;
 
@@ -25,6 +29,8 @@ public class IncrementalBackupService {
 
     private ManagedObjectReference morOfSnapShot;
 
+    private int diskDeviceKey;
+
     public static void main(String[] args) throws Exception {
         disableCertValidation();
 
@@ -32,8 +38,10 @@ public class IncrementalBackupService {
         backupService.connectToServer();
         backupService.queryVMProperties();
         backupService.enableCBT();
-        //backupService.createSnapshot();
-        //backupService.removeSnapShot();
+        backupService.createSnapshot();
+        //backupService.recordChangedBlock();
+        backupService.recordChangeId();
+        backupService.removeSnapShot();
     }
 
     private static void disableCertValidation() throws Exception {
@@ -246,7 +254,7 @@ public class IncrementalBackupService {
 
     private void enableCBT() throws Exception{
         VirtualMachineConfigSpec configSpec = new VirtualMachineConfigSpec();
-        configSpec.setChangeTrackingEnabled(false);
+        configSpec.setChangeTrackingEnabled(true);
         ManagedObjectReference taskMoRef =
                 vimPort.reconfigVMTask(morOfSelectedVM, configSpec);
         Object[] result = wait(taskMoRef, new String[]{"info.state",
@@ -262,6 +270,46 @@ public class IncrementalBackupService {
             throw new RuntimeException(((LocalizedMethodFault) result[1])
                     .getLocalizedMessage());
         }
+    }
+
+    private void recordChangeId() throws Exception {
+        ArrayOfVirtualDevice arrayOfVirtualDevice = (ArrayOfVirtualDevice) queryProperties(morOfSnapShot, new String[]{"config.hardware.device"})
+                .get("config.hardware.device");
+        List<VirtualDevice> virtualDeviceList = arrayOfVirtualDevice.getVirtualDevice();
+        for(VirtualDevice virtualDevice: virtualDeviceList) {
+            if(virtualDevice instanceof VirtualDisk) {
+                VirtualDisk virtualDisk = (VirtualDisk)virtualDevice;
+                if(virtualDisk.getCapacityInKB() == 1024) {
+                    writeToFile("changeId.txt", ((VirtualDiskFlatVer2BackingInfo)virtualDisk.getBacking()).getChangeId());
+                }
+            }
+        }
+    }
+
+    private void recordChangedBlock() throws Exception {
+        String lastChangeId = readFromFile("changeId.txt");
+
+        ArrayOfVirtualDevice arrayOfVirtualDevice = (ArrayOfVirtualDevice) queryProperties(morOfSnapShot, new String[]{"config.hardware.device"})
+                .get("config.hardware.device");
+        List<VirtualDevice> virtualDeviceList = arrayOfVirtualDevice.getVirtualDevice();
+        for(VirtualDevice virtualDevice: virtualDeviceList) {
+            if(virtualDevice instanceof VirtualDisk) {
+                VirtualDisk virtualDisk = (VirtualDisk)virtualDevice;
+                if(virtualDisk.getCapacityInKB() == 16384000) {
+                    diskDeviceKey = virtualDisk.getKey();
+                }
+            }
+        }
+
+        DiskChangeInfo diskChangeInfo = vimPort.queryChangedDiskAreas(morOfSelectedVM, morOfSnapShot, diskDeviceKey, 0, lastChangeId);
+        StringBuilder sb = new StringBuilder();
+        for(DiskChangeExtent diskChangeExtent: diskChangeInfo.getChangedArea()) {
+            sb.append(diskChangeExtent.getStart() / 512);
+            sb.append(" ");
+            sb.append(diskChangeExtent.getLength() / 512);
+            sb.append("\n");
+        }
+        writeToFile("changeBlock.txt", sb.toString());
     }
 
     private void createSnapshot() throws Exception{
@@ -308,6 +356,19 @@ public class IncrementalBackupService {
             throw new RuntimeException(((LocalizedMethodFault) result[1])
                     .getLocalizedMessage());
         }
+    }
+
+    private void writeToFile(String filename, String content) throws Exception{
+        BufferedWriter bw = new BufferedWriter(new FileWriter(filename));
+        bw.write(content);
+        bw.close();
+    }
+
+    private String readFromFile(String filename) throws Exception {
+        BufferedReader br = new BufferedReader(new FileReader(filename));
+        String result = br.readLine();
+        br.close();
+        return result;
     }
 
     private List<ObjectContent> retrieveProperties(List<PropertyFilterSpec> propertyFilterSpecList)
