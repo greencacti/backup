@@ -31,6 +31,8 @@ public class IncrementalBackupService {
 
     private int diskDeviceKey;
 
+    private long diskCapacity;
+
     public static void main(String[] args) throws Exception {
         disableCertValidation();
 
@@ -39,7 +41,7 @@ public class IncrementalBackupService {
         backupService.queryVMProperties();
         backupService.enableCBT();
         backupService.createSnapshot();
-        //backupService.recordChangedBlock();
+        backupService.recordChangedBlock();
         backupService.recordChangeId();
         backupService.removeSnapShot();
     }
@@ -295,21 +297,30 @@ public class IncrementalBackupService {
         for(VirtualDevice virtualDevice: virtualDeviceList) {
             if(virtualDevice instanceof VirtualDisk) {
                 VirtualDisk virtualDisk = (VirtualDisk)virtualDevice;
-                if(virtualDisk.getCapacityInKB() == 16384000) {
+                if(virtualDisk.getCapacityInKB() == 16384000l) {
                     diskDeviceKey = virtualDisk.getKey();
+                    diskCapacity = virtualDisk.getCapacityInBytes();
                 }
             }
         }
 
-        DiskChangeInfo diskChangeInfo = vimPort.queryChangedDiskAreas(morOfSelectedVM, morOfSnapShot, diskDeviceKey, 0, lastChangeId);
+        long startPosition = 0;
         StringBuilder sb = new StringBuilder();
-        for(DiskChangeExtent diskChangeExtent: diskChangeInfo.getChangedArea()) {
-            sb.append(diskChangeExtent.getStart() / 512);
-            sb.append(" ");
-            sb.append(diskChangeExtent.getLength() / 512);
-            sb.append("\n");
-        }
+        do {
+            DiskChangeInfo diskChangeInfo = vimPort.queryChangedDiskAreas(morOfSelectedVM, morOfSnapShot, diskDeviceKey, startPosition, "*");
+
+            for(DiskChangeExtent diskChangeExtent: diskChangeInfo.getChangedArea()) {
+                sb.append(diskChangeExtent.getStart() / 512);
+                sb.append(" ");
+                sb.append(diskChangeExtent.getLength() / 512);
+                sb.append("\n");
+            }
+
+            startPosition = diskChangeInfo.getStartOffset() + diskChangeInfo.getLength();
+        } while (startPosition < diskCapacity);
+
         writeToFile("changeBlock.txt", sb.toString());
+
     }
 
     private void createSnapshot() throws Exception{
