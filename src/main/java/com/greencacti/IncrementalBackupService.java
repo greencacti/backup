@@ -43,7 +43,7 @@ public class IncrementalBackupService {
         backupService.createSnapshot();
         backupService.recordChangedBlock();
         backupService.recordChangeId();
-        backupService.removeSnapShot();
+        //backupService.removeSnapShot();
     }
 
     private static void disableCertValidation() throws Exception {
@@ -215,7 +215,7 @@ public class IncrementalBackupService {
             for (int i = 0; i < objectContentList.size(); i++) {
                 objectContent = objectContentList.get(i);
                 mor = objectContent.getObj();
-                if(mor.getValue().equals("vm-1676")) {
+                if(mor.getValue().equals("vm-1763")) {
                     System.out.println("Object Type : " + mor.getType());
                     System.out.println("Reference Value : " + mor.getValue());
 
@@ -281,16 +281,17 @@ public class IncrementalBackupService {
         for(VirtualDevice virtualDevice: virtualDeviceList) {
             if(virtualDevice instanceof VirtualDisk) {
                 VirtualDisk virtualDisk = (VirtualDisk)virtualDevice;
+                String changeId = ((VirtualDiskFlatVer2BackingInfo)virtualDisk.getBacking()).getChangeId();
                 if(virtualDisk.getCapacityInKB() == 1024) {
-                    writeToFile("changeId.txt", ((VirtualDiskFlatVer2BackingInfo)virtualDisk.getBacking()).getChangeId());
+                    writeToFile("changeIdForData.txt", changeId);
+                } else {
+                    writeToFile("changeIdForSystem.txt", changeId);
                 }
             }
         }
     }
 
     private void recordChangedBlock() throws Exception {
-        String lastChangeId = readFromFile("changeId.txt");
-
         ArrayOfVirtualDevice arrayOfVirtualDevice = (ArrayOfVirtualDevice) queryProperties(morOfSnapShot, new String[]{"config.hardware.device"})
                 .get("config.hardware.device");
         List<VirtualDevice> virtualDeviceList = arrayOfVirtualDevice.getVirtualDevice();
@@ -300,10 +301,17 @@ public class IncrementalBackupService {
                 diskDeviceKey = virtualDisk.getKey();
                 diskCapacity = virtualDisk.getCapacityInBytes();
 
+                String lastChangeId = "";
+                if(virtualDisk.getCapacityInKB() == 1024) {
+                    lastChangeId = readFromFile("changeIdForData.txt");
+                } else {
+                    lastChangeId = readFromFile("changeIdForSystem.txt");
+                }
+
                 long startPosition = 0;
                 StringBuilder sb = new StringBuilder();
                 do {
-                    DiskChangeInfo diskChangeInfo = vimPort.queryChangedDiskAreas(morOfSelectedVM, morOfSnapShot, diskDeviceKey, startPosition, "*");
+                    DiskChangeInfo diskChangeInfo = vimPort.queryChangedDiskAreas(morOfSelectedVM, morOfSnapShot, diskDeviceKey, startPosition, lastChangeId);
 
                     for(DiskChangeExtent diskChangeExtent: diskChangeInfo.getChangedArea()) {
                         sb.append(diskChangeExtent.getStart() / 512);
@@ -315,10 +323,10 @@ public class IncrementalBackupService {
                     startPosition = diskChangeInfo.getStartOffset() + diskChangeInfo.getLength();
                 } while (startPosition < diskCapacity);
 
-                if(virtualDisk.getCapacityInKB() == 16384000l) {
-                    writeToFile("changeBlockForSystem.txt", sb.toString());
+                if(virtualDisk.getCapacityInKB() == 1024) {
+                    writeToFile("changeBlockForData1.txt", sb.toString());
                 } else {
-                    writeToFile("changeBlockForData.txt", sb.toString());
+                    writeToFile("changeBlockForSystem1.txt", sb.toString());
                 }
             }
         }
